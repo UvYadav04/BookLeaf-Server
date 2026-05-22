@@ -314,7 +314,6 @@ Description:
                             f"Related Ticket #{index}\n"
                             f"Subject: {item.get('title')}\n"
                             f"Description: {item.get('description')}\n"
-                            f"Previous Resolution: {item.get('resolution')}\n"
                         )
                     )
 

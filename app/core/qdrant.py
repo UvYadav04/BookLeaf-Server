@@ -124,16 +124,25 @@ class TicketVectors:
         searchable_text = self._text(title=title, description=description)
         embedding = self.create_embedding(searchable_text)
 
-        results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=embedding,
-            limit=limit,
-            score_threshold=score_threshold,
-            query_filter=self._build_filter(filters),
-            with_payload=True,
-        )
+        results = self.client.query_points(
+        collection_name=self.collection_name,
+        query=embedding,
+        limit=limit,
+        score_threshold=score_threshold,
+        query_filter=self._build_filter(filters),
+        with_payload=True,)
 
-        return [{"id": item.id, "score": item.score, "payload": item.payload} for item in results]
+
+        points = results.points
+
+        return [
+            {
+                "id": item.id,
+                "score": item.score,
+                "payload": item.payload,
+            }
+            for item in points
+        ]
 
     def delete_ticket(self, point_id: str) -> bool:
         self.client.delete(collection_name=self.collection_name, points_selector=[point_id], wait=True)
