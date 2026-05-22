@@ -351,7 +351,7 @@ async def generate_draft_for_ticket(
         limit=5,
         score_threshold=0.72,
         filters={
-            "status": "resolved",
+            # "status": "resolved",
             "book_id":ticket["bookId"]
         },
     )

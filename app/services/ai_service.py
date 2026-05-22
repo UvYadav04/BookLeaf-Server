@@ -263,42 +263,101 @@ Description:
             fallback,
         )
  
-    async def draft_response(self, ticket: dict[str, Any], author: dict[str, Any], book: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def draft_response(
+        self,
+        ticket: dict[str, Any],
+        author: dict[str, Any],
+        book: dict[str, Any] | None = None,
+        historical_context: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+
         async def _executor() -> dict[str, Any]:
             system_prompt = (
-                "You are BookLeaf Support. Use empathetic professional tone. "
+                "You are BookLeaf Support. "
+                "Use empathetic professional tone. "
                 "Acknowledge concern first, provide specific timeline and clear next step. "
+                "Use historical support resolutions when useful. "
                 "Do not invent internal policies."
             )
+
             ticket_text = (
-                f"Author: {author.get('name')} ({author.get('email')})\n"
+                f"Author: {author.get('name')} "
+                f"({author.get('email')})\n"
                 f"Subject: {ticket.get('subject')}\n"
                 f"Description: {ticket.get('description')}\n"
                 f"Category: {ticket.get('category')}\n"
                 f"Priority: {ticket.get('priority')}\n"
             )
+
             book_text = ""
+
             if book:
                 book_text = (
-                    f"Book context: title={book.get('title')}, isbn={book.get('isbn')}, "
-                    f"status={book.get('status')}, royaltyPending={book.get('royaltyPending')}"
+                    f"Book context:\n"
+                    f"title={book.get('title')}\n"
+                    f"isbn={book.get('isbn')}\n"
+                    f"status={book.get('status')}\n"
+                    f"royaltyPending={book.get('royaltyPending')}\n"
                 )
 
-            user_prompt = f"Knowledge Base:\n{KB}\n\nTicket:\n{ticket_text}\n{book_text}\n\nDraft response in 120-180 words."
+            # -------------------------------------
+            # Historical Context
+            # -------------------------------------
+            history_text = ""
+
+            if historical_context:
+                formatted_history = []
+
+                for index, item in enumerate(historical_context, start=1):
+                    formatted_history.append(
+                        (
+                            f"Related Ticket #{index}\n"
+                            f"Subject: {item.get('title')}\n"
+                            f"Description: {item.get('description')}\n"
+                            f"Previous Resolution: {item.get('resolution')}\n"
+                        )
+                    )
+
+                history_text = (
+                    "Relevant Historical Tickets:\n\n"
+                    + "\n".join(formatted_history)
+                )
+
+            user_prompt = (
+                f"Knowledge Base:\n{KB}\n\n"
+                f"Ticket:\n{ticket_text}\n\n"
+                f"{book_text}\n\n"
+                f"{history_text}\n\n"
+                "Draft response in 120-180 words."
+            )
+
             output = await self._invoke_with_retry(
                 self.generator_model,
-                [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ],
             )
-            return {"draft": output.strip(), "source": "ai"}
+
+            return {
+                "draft": output.strip(),
+                "source": "ai",
+            }
 
         fallback = {
             "draft": (
-                "Thank you for reaching out and sharing this. I understand your concern and we are reviewing the details now. "
+                "Thank you for reaching out and sharing this. "
+                "I understand your concern and we are reviewing the details now. "
                 "Our team has logged your ticket and an operations specialist will provide a concrete update within 48 hours. "
                 "If applicable, please share any supporting screenshots or references so we can speed up resolution."
-            )
+            ),
+            "source": "fallback",
         }
-        return await self._safe_ai_call("draft_response", _executor, fallback)
 
+        return await self._safe_ai_call(
+            "draft_response",
+            _executor,
+            fallback,
+        )
 
 ai_service = AIService()

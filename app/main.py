@@ -11,7 +11,7 @@ from app.core.database import close_mongo_connection, connect_to_mongo
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.routes import admin, author, auth, health
-import logging
+# import logging
 
 
 @asynccontextmanager
@@ -30,9 +30,9 @@ app = FastAPI(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger = logging.getLogger("uvicorn.access")
+    # logger = logging.getLogger("uvicorn.access")
     # Log incoming request method and path
-    logger.info(f"Incoming request: {request.method} {request.url.path}")
+    # logger.info(f"Incoming request: {request.method} {request.url.path}")
     response = await call_next(request)
     return response
 

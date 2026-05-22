@@ -56,13 +56,13 @@ class TicketVectorStore:
             for collection in collections.collections
         )
 
-        if exists:
-            print(
-            f'Deleting existing collection "{self.collection_name}"'
-        )
+        # if exists:
+        #     print(
+        #     f'Deleting existing collection "{self.collection_name}"'
+        # )
 
-            self.client.delete_collection(
-            collection_name=self.collection_name)
+        #     self.client.delete_collection(
+        #     collection_name=self.collection_name)
 
         if exists:
             print(
