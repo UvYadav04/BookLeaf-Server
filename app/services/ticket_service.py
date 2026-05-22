@@ -28,9 +28,9 @@ def _ticket_defaults() -> dict[str, Any]:
         "aiMeta": {},
     }
 
-
 async def _require_ticket(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[str, Any]:
-    ticket = await db.tickets.find_one({"_id": ticket_id})
+    print("ticket_id ",ticket_id)
+    ticket = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
     return ticket
@@ -52,7 +52,7 @@ async def _validate_book_access(
         pass
 
     for candidate in candidates:
-        book = await db.books.find_one({"_id": candidate, "authorId": author_id})
+        book = await db.books.find_one({"id": candidate, "authorId": author_id})
         if book:
             return str(candidate)
 
@@ -84,10 +84,9 @@ def _build_message(
 ) -> dict[str, Any]:
     now = utc_now()
     return {
-        "_id": f"{prefix}_{ticket_id}_{int(now.timestamp() * 1000)}",
-        "ticketId": ticket_id,
+        "ticketId": str(ticket_id),
         "senderRole": "admin",
-        "senderId": admin_id,
+        "senderId": str(admin_id),
         "message": message,
         "isInternal": prefix == "note",
         "createdAt": now,
@@ -101,23 +100,28 @@ async def create_ticket(
     *,
     image: UploadFile | None = None,
 ) -> dict[str, Any]:
+
+
     now = utc_now()
-    ticket_id = f"tkt_{int(now.timestamp() * 1000)}"
-    book_id = await _validate_book_access(payload.bookId, author["_id"], db)
-    image_url = await save_ticket_image(ticket_id, image) if image else None
+    print(payload)
+    if payload.bookId != "General" and payload.bookId != "Account Level":
+        book_id = await _validate_book_access(payload.bookId, str(author["_id"]), db)
+    else:
+        book_id = payload.bookId
 
     ticket = {
-        "_id": ticket_id,
-        "authorId": author["_id"],
+        "authorId": str(author["_id"]),
         "bookId": book_id,
-        "imageUrl": image_url,
         "subject": payload.subject,
         "description": payload.description,
         **_ticket_defaults(),
         "createdAt": now,
         "updatedAt": now,
     }
+
     await db.tickets.insert_one(ticket)
+    print(ticket)
+    image_url = await save_ticket_image(ticket["_id"], image) if image else None
 
     # Run AI category/priority calls in parallel to reduce ticket create latency.
     classification, priority = await asyncio.gather(
@@ -129,6 +133,7 @@ async def create_ticket(
         "category": classification["category"],
         "priority": priority["priority"],
         "updatedAt": utc_now(),
+        "imageUrl":image_url,
         "aiMeta": {
             "classification": classification,
             "priority": priority,
@@ -174,13 +179,13 @@ async def list_author_tickets(author_id: str, db: AsyncIOMotorDatabase) -> tuple
 
 
 async def get_ticket_for_author(ticket_id: str, author_id: str, db: AsyncIOMotorDatabase) -> dict[str, Any]:
-    ticket = await db.tickets.find_one({"_id": ticket_id, "authorId": author_id})
+    ticket = await db.tickets.find_one({"_id": ObjectId(ticket_id), "authorId": author_id})
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
 
     messages = [
         msg
-        async for msg in db.ticket_messages.find({"ticketId": ticket_id, "isInternal": False}).sort("createdAt", 1)
+        async for msg in db.ticket_messages.find({"ticketId": ObjectId(ticket_id), "isInternal": False}).sort("createdAt", 1)
     ]
     ticket["messages"] = messages
     return ticket
@@ -205,11 +210,10 @@ async def update_ticket(
         return ticket
 
     updates["updatedAt"] = utc_now()
-    await db.tickets.update_one({"_id": ticket_id}, {"$set": updates})
+    await db.tickets.update_one({"_id": ObjectId(ticket_id)}, {"$set": updates})
 
     await db.ticket_events.insert_one(
         {
-            "_id": f"ev_{ticket_id}_{int(utc_now().timestamp() * 1000)}",
             "ticketId": ticket_id,
             "eventType": "ticket.updated",
             "by": admin["_id"],
@@ -249,7 +253,7 @@ async def add_internal_note(
     await _require_ticket(ticket_id, db)
     payload = _build_message(ticket_id, "note", note, admin["_id"])
     await db.ticket_messages.insert_one(payload)
-    await db.tickets.update_one({"_id": ticket_id}, {"$set": {"updatedAt": payload["createdAt"]}})
+    await db.tickets.update_one({"_id": ObjectId(ticket_id)}, {"$set": {"updatedAt": payload["createdAt"]}})
     return payload
 
 
@@ -260,11 +264,12 @@ async def assign_ticket(
     db: AsyncIOMotorDatabase,
 ) -> dict[str, Any]:
     await _require_ticket(ticket_id, db)
-    admin = await db.users.find_one({"_id": admin_id, "role": "admin"})
+    print("admin id",admin_id)
+    admin = await db.users.find_one({"_id": ObjectId(admin_id), "role": "admin"})
     if not admin:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin not found")
 
-    await db.tickets.update_one({"_id": ticket_id}, {"$set": {"assigneeId": admin_id}})
+    await db.tickets.update_one({"_id": ObjectId(ticket_id)}, {"$set":{"assigneeId": admin_id}})
     await db.ticket_events.insert_one(
         {
             "ticketId": ticket_id,
@@ -274,12 +279,12 @@ async def assign_ticket(
             "createdAt": utc_now(),
         }
     )
-    return await db.tickets.find_one({"_id": ticket_id})
+    return await db.tickets.find_one({"_id": ObjectId(ticket_id)})
 
 
 async def create_ticket_draft(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[str, Any]:
     ticket = await _require_ticket(ticket_id, db)
-    author = await db.users.find_one({"_id": ticket["authorId"]})
+    author = await db.users.find_one({"_id": ObjectId(ticket["authorId"])})
     if not author:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Author not found")
 
@@ -313,8 +318,10 @@ async def create_ticket_draft(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[
         historical_context=history,
     )
 
+    print(draft)
+
     await db.tickets.update_one(
-        {"_id": ticket_id},
+        {"_id": ObjectId(ticket_id)},
         {"$set": {"updatedAt": utc_now(), "aiMeta.draft": draft, "aiMeta.relatedTickets": history}},
     )
 
@@ -322,5 +329,4 @@ async def create_ticket_draft(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[
 
 
 async def generate_draft_for_ticket(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[str, Any]:
-    """Backward-compatible alias while routes and callers move to the shorter name."""
     return await create_ticket_draft(ticket_id, db)

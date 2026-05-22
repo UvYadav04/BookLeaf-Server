@@ -31,7 +31,6 @@ class TicketVectors:
     def __init__(self) -> None:
         if getattr(self, "_initialized", False):
             return
-
         self.qdrant_url = settings.qdrant_url
         self.qdrant_api_key = settings.qdrant_api_key
         self.collection_name = settings.qdrant_collection
@@ -141,7 +140,6 @@ class TicketVectors:
         return True
 
 
-# Backward compatibility while using the shorter class name in new code.
 TicketVectorStore = TicketVectors
 ticket_vectors = TicketVectors()
 ticket_vector_store = ticket_vectors

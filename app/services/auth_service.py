@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -24,17 +26,49 @@ def _admin_emails() -> set[str]:
     return {email.strip().lower() for email in settings.admin_email.split(",") if email.strip()}
 
 
+def _user_id_filter(user_id: str) -> dict[str, Any]:
+    filters: list[dict[str, Any]] = [{"_id": user_id}]
+    try:
+        filters.append({"_id": ObjectId(user_id)})
+    except (InvalidId, TypeError):
+        pass
+    return {"$or": filters} if len(filters) > 1 else filters[0]
+
+
+async def _migrate_book_author_ids(db: AsyncIOMotorDatabase) -> None:
+    """
+    Normalize legacy books where authorId was stored using users.id instead of users._id.
+    Runs on login to self-heal existing data without manual migration scripts.
+    """
+    total_modified = 0
+    cursor = db.users.find({"id": {"$exists": True}}, {"_id": 1, "id": 1})
+    async for user in cursor:
+        legacy_user_id = str(user.get("id", "")).strip()
+        current_user_id = str(user["_id"])
+        if not legacy_user_id or legacy_user_id == current_user_id:
+            continue
+
+        result = await db.books.update_many(
+            {"authorId": legacy_user_id},
+            {"$set": {"authorId": current_user_id}},
+        )
+        total_modified += result.modified_count
+
+    if total_modified:
+        logger.info("Migrated %s book(s) from legacy authorId to _id", total_modified)
+
+
 def is_admin_user(user: dict[str, Any]) -> bool:
     email = _normalize_email(user.get("email", ""))
-    return user.get("role") == "admin" or email in _admin_emails()
+    return user.get("role", "").lower() == "admin" or email in _admin_emails()
 
 
 def get_user_info(user: dict[str, Any]) -> dict[str, Any]:
     return {
-        "id": user["_id"],
+        "id": str(user["_id"]),
         "name": user["name"],
         "email": user["email"],
-        "role": user["role"],
+        "role": user["role"].lower(),
         "isAdmin": is_admin_user(user),
     }
 
@@ -58,8 +92,8 @@ async def signup_user(payload: SignupRequest, db: AsyncIOMotorDatabase) -> dict[
     }
     await db.users.insert_one(user)
 
-    access_token = create_access_token(user["_id"], user["role"])
-    refresh_token = create_refresh_token(user["_id"])
+    access_token = create_access_token(str(user["_id"]), user["role"])
+    refresh_token = create_refresh_token(str(user["_id"]))
 
     return {
         "user": get_user_info(user),
@@ -78,8 +112,10 @@ async def login_user(payload: LoginRequest, db: AsyncIOMotorDatabase) -> dict[st
         logger.info("Login failed for email=%s", email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    access_token = create_access_token(user["_id"], user["role"])
-    refresh_token = create_refresh_token(user["_id"])
+    # await _migrate_book_author_ids(db)
+
+    access_token = create_access_token(str(user["_id"]), user["role"])
+    refresh_token = create_refresh_token(str(user["_id"]))
 
     return {
         "user": get_user_info(user),
@@ -108,12 +144,12 @@ async def refresh_session(refresh_token: str, db: AsyncIOMotorDatabase) -> dict[
     if datetime.fromtimestamp(exp, timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired")
 
-    user = await db.users.find_one({"_id": user_id})
+    user = await db.users.find_one(_user_id_filter(str(user_id)))
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return {
-        "accessToken": create_access_token(user["_id"], user["role"]),
-        "refreshToken": create_refresh_token(user["_id"]),
+        "accessToken": create_access_token(str(user["_id"]), user["role"]),
+        "refreshToken": create_refresh_token(str(user["_id"])),
         "tokenType": "bearer",
     }

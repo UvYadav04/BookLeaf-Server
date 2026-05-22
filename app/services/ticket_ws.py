@@ -10,26 +10,29 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.utils.serialize import serialize_document
 
 logger = logging.getLogger(__name__)
+from bson import ObjectId
 
 
 class TicketWebSocketManager:
-    """Tracks author WebSocket connections and pushes ticket updates."""
 
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = defaultdict(set)
 
     async def connect(self, author_id: str, websocket: WebSocket) -> None:
+        author_id = str(author_id)
         await websocket.accept()
         self._connections[author_id].add(websocket)
         logger.info("Author %s connected to ticket WebSocket (%d)", author_id, len(self._connections[author_id]))
 
     def disconnect(self, author_id: str, websocket: WebSocket) -> None:
+        author_id = str(author_id)
         self._connections[author_id].discard(websocket)
         if not self._connections[author_id]:
             del self._connections[author_id]
         logger.info("Author %s disconnected from ticket WebSocket", author_id)
 
     async def send_to_author(self, author_id: str, payload: dict) -> None:
+        author_id = str(author_id)
         sockets = list(self._connections.get(author_id, set()))
         if not sockets:
             return
@@ -52,7 +55,7 @@ class TicketWebSocketManager:
         *,
         event_type: str = "ticket.updated",
     ) -> None:
-        ticket = await db.tickets.find_one({"_id": ticket_id})
+        ticket = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
         if not ticket:
             return
 

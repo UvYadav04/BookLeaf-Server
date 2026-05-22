@@ -27,8 +27,9 @@ class UserSummary(BaseModel):
     name: str
     email: EmailStr
     role: str
-    isAdmin: bool = False
-
+    isAdmin: bool
+    # phone: str
+    # city: str
 
 class UserInfo(BaseModel):
     id: str

@@ -13,15 +13,15 @@ router = APIRouter()
 async def signup(payload: SignupRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
     return await signup_user(payload, db)
 
+@router.post("/login", response_model=LoginResponse)
+async def login(payload: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    return await login_user(payload, db)
 
 @router.get("/me", response_model=UserInfo)
 async def me(current_user: dict = Depends(get_current_user)):
     return get_user_info(current_user)
 
 
-@router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
-    return await login_user(payload, db)
 
 
 @router.post("/refresh")

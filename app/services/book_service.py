@@ -4,23 +4,22 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.schemas.book import BookCreateRequest
 from app.utils.time import utc_now
-
 
 async def list_author_books(author_id: str, db: AsyncIOMotorDatabase) -> list[dict[str, Any]]:
     return [item async for item in db.books.find({"authorId": author_id}).sort("publicationDate", -1)]
 
 
 async def publish_book(
-    payload: BookCreateRequest,
+    payload: Any,
     author: dict[str, Any],
     db: AsyncIOMotorDatabase,
 ) -> dict[str, Any]:
     now = utc_now()
+
     book = {
         "_id": f"book_{int(now.timestamp() * 1000)}",
-        "authorId": author["_id"],
+        "authorId": str(author["_id"]),
         "title": payload.title.strip(),
         "isbn": payload.isbn,
         "genre": payload.genre.strip(),

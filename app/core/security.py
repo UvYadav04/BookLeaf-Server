@@ -1,55 +1,43 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.database import get_db
 
-import hashlib
-
-from fastapi.security import HTTPBearer
-from passlib.context import CryptContext
-
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-)
-
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=True)
 
 
-def _normalize_password(password: str) -> str:
+def _user_id_filter(user_id: str) -> dict[str, Any]:
+    filters: list[dict[str, Any]] = [{"_id": user_id}]
+    try:
+        filters.append({"_id": ObjectId(user_id)})
+    except (InvalidId, TypeError):
+        pass
+    return {"$or": filters} if len(filters) > 1 else filters[0]
 
-    return hashlib.sha256(
-        password.encode("utf-8")
-    ).hexdigest()
+
+def _normalize_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 def hash_password(password: str) -> str:
-    normalized_password = _normalize_password(password)
-
-    return pwd_context.hash(normalized_password)
+    return pwd_context.hash(_normalize_password(password))
 
 
-def verify_password(
-    plain_password: str,
-    hashed_password: str,
-) -> bool:
-    normalized_password = _normalize_password(
-        plain_password
-    )
-
-    return pwd_context.verify(
-        normalized_password,
-        hashed_password,
-    )
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(_normalize_password(plain_password), hashed_password)
 
 
 def create_access_token(subject: str, role: str) -> str:
@@ -80,15 +68,17 @@ async def get_current_user(
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
 
-    user = await db.users.find_one({"_id": user_id})
+    user = await db.users.find_one(_user_id_filter(str(user_id)))
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
 
 
 def require_role(*roles: Literal["author", "admin"]):
+    normalized_roles = {role.lower() for role in roles}
+
     async def role_dependency(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        if current_user.get("role") not in roles:
+        if current_user.get("role", "").lower() not in normalized_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         return current_user
 
