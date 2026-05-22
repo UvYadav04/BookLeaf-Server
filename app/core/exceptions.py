@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 class AppError(Exception):
@@ -13,7 +16,14 @@ class AppError(Exception):
         super().__init__(message)
 
 
-async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    logger.warning(
+        "AppError: %s (status=%d) [path=%s, method=%s]",
+        exc.message,
+        exc.status_code,
+        request.url.path,
+        request.method,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -26,7 +36,15 @@ async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
     )
 
 
-async def generic_error_handler(_: Request, exc: Exception) -> JSONResponse:
+async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "Unhandled exception: %s [type=%s, path=%s, method=%s]",
+        str(exc),
+        exc.__class__.__name__,
+        request.url.path,
+        request.method,
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

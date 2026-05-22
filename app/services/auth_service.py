@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -12,15 +13,20 @@ from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.schemas.auth import LoginRequest, SignupRequest
 
+logger = logging.getLogger(__name__)
+
 
 def _normalize_email(email: str) -> str:
     return email.lower().strip()
 
 
+def _admin_emails() -> set[str]:
+    return {email.strip().lower() for email in settings.admin_email.split(",") if email.strip()}
+
+
 def is_admin_user(user: dict[str, Any]) -> bool:
     email = _normalize_email(user.get("email", ""))
-    admin_email = _normalize_email(settings.admin_email)
-    return user.get("role") == "admin" or (bool(admin_email) and email == admin_email)
+    return user.get("role") == "admin" or email in _admin_emails()
 
 
 def get_user_info(user: dict[str, Any]) -> dict[str, Any]:
@@ -40,12 +46,7 @@ async def signup_user(payload: SignupRequest, db: AsyncIOMotorDatabase) -> dict[
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     now = datetime.now(timezone.utc)
-    admin_emails = [
-        e.strip().lower()
-        for e in settings.admin_email.split(",")
-    ]
-
-    role = "admin" if email.lower() in admin_emails else "author"  
+    role = "admin" if email in _admin_emails() else "author"
     user: dict[str, Any] = {
         "_id": f"usr_{uuid.uuid4().hex[:12]}",
         "name": payload.name.strip(),
@@ -71,9 +72,10 @@ async def signup_user(payload: SignupRequest, db: AsyncIOMotorDatabase) -> dict[
 
 
 async def login_user(payload: LoginRequest, db: AsyncIOMotorDatabase) -> dict[str, Any]:
-    user = await db.users.find_one({"email": _normalize_email(payload.email)})
-    print(user)
+    email = _normalize_email(payload.email)
+    user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["passwordHash"]):
+        logger.info("Login failed for email=%s", email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     access_token = create_access_token(user["_id"], user["role"])

@@ -12,7 +12,7 @@ from app.services.ticket_service import (
     add_admin_reply,
     add_internal_note,
     assign_ticket,
-    generate_draft_for_ticket,
+    create_ticket_draft,
     list_admin_tickets,
     update_ticket,
 )
@@ -146,7 +146,7 @@ async def draft_ticket_response(
     _: dict = Depends(require_role("admin")),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    draft = await generate_draft_for_ticket(
+    draft = await create_ticket_draft(
         ticket_id,
         db,
     )

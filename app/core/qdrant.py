@@ -1,23 +1,34 @@
-import os
-import uuid
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams, PointStruct
+import logging
+import uuid
+from typing import Any
 
 from fastembed import TextEmbedding
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
+
 from .config import settings
 
-class TicketVectorStore:
-    _instance = None
+logger = logging.getLogger(__name__)
 
-    def __new__(cls):
+
+class TicketVectors:
+    _instance: TicketVectors | None = None
+
+    def __new__(cls) -> TicketVectors:
         if cls._instance is None:
-            cls._instance = super(TicketVectorStore, cls).__new__(cls)
-
+            cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if getattr(self, "_initialized", False):
             return
 
@@ -27,120 +38,52 @@ class TicketVectorStore:
 
         if not self.qdrant_url:
             raise ValueError("QDRANT_URL is missing")
-
         if not self.collection_name:
             raise ValueError("QDRANT_COLLECTION_NAME is missing")
 
-        self.client = QdrantClient(
-            url=self.qdrant_url,
-            api_key=self.qdrant_api_key,
-        )
-
+        self.client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
         self.embedding_model_name = "BAAI/bge-small-en-v1.5"
-
-        self.embedder = TextEmbedding(
-            model_name=self.embedding_model_name
-        )
-
+        self.embedder = TextEmbedding(model_name=self.embedding_model_name)
         self.vector_size = 384
-
         self._ensure_collection()
-
         self._initialized = True
 
-    def _ensure_collection(self):
+    def _ensure_collection(self) -> None:
         collections = self.client.get_collections()
-
-        exists = any(
-            collection.name == self.collection_name
-            for collection in collections.collections
-        )
-
-        # if exists:
-        #     print(
-        #     f'Deleting existing collection "{self.collection_name}"'
-        # )
-
-        #     self.client.delete_collection(
-        #     collection_name=self.collection_name)
-
+        exists = any(col.name == self.collection_name for col in collections.collections)
         if exists:
-            print(
-                f'Collection "{self.collection_name}" already exists'
-            )
-
+            logger.info('Qdrant collection "%s" already exists', self.collection_name)
             return
 
         self.client.create_collection(
             collection_name=self.collection_name,
-            vectors_config=VectorParams(
-                size=self.vector_size,
-                distance=Distance.COSINE,
-            ),
+            vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
 
-        indexed_fields = [
-        "status",
-        "book_id",
-        "category",
-        "priority",
-        "keyword",
-        ]
-
-        for field in indexed_fields:
+        for field in ("status", "book_id", "category", "priority", "keyword"):
             try:
                 self.client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
                     field_schema="keyword",
                 )
+                logger.info('Created payload index for "%s"', field)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('Payload index "%s" may already exist: %s', field, exc)
 
-                print(f'Created index for "{field}"')
+        logger.info('Qdrant collection "%s" created', self.collection_name)
 
-            except Exception as e:
-                print(
-                    f'Index "{field}" may already exist: {str(e)}'
-                )
+    def _text(self, title: str, description: str) -> str:
+        return f"Ticket Title:\n{title}\n\nTicket Description:\n{description}".strip()
 
-        print(
-            f'Collection "{self.collection_name}" created successfully'
-        )
-
-    def _build_searchable_text(
-        self,
-        title: str,
-        description: str,
-    ) -> str:
-        return f"""
-Ticket Title:
-{title}
-
-Ticket Description:
-{description}
-        """.strip()
-
-    def create_embedding(self, text: str) -> List[float]:
-        embedding_generator = self.embedder.embed([text])
-
-        embedding = next(embedding_generator)
-
+    def create_embedding(self, text: str) -> list[float]:
+        embedding = next(self.embedder.embed([text]))
         return embedding.tolist()
 
-    def add_ticket(
-        self,
-        title: str,
-        description: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    def add_ticket(self, title: str, description: str, metadata: dict[str, Any] | None = None) -> str:
         metadata = metadata or {}
-
-        searchable_text = self._build_searchable_text(
-            title=title,
-            description=description,
-        )
-
+        searchable_text = self._text(title=title, description=description)
         embedding = self.create_embedding(searchable_text)
-
         point_id = str(uuid.uuid4())
 
         self.client.upsert(
@@ -159,8 +102,17 @@ Ticket Description:
             ],
             wait=True,
         )
-
         return point_id
+
+    def _build_filter(self, filters: dict[str, Any] | None) -> Filter | None:
+        if not filters:
+            return None
+        conditions = [
+            FieldCondition(key=key, match=MatchValue(value=value))
+            for key, value in filters.items()
+            if value is not None
+        ]
+        return Filter(must=conditions) if conditions else None
 
     def search_tickets(
         self,
@@ -168,64 +120,28 @@ Ticket Description:
         description: str,
         limit: int = 5,
         score_threshold: float = 0.7,
-        filters: Optional[Dict[str, Any]] = None,
-    ):
-        searchable_text = self._build_searchable_text(
-            title=title,
-            description=description,
-        )
-
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        searchable_text = self._text(title=title, description=description)
         embedding = self.create_embedding(searchable_text)
-
-        query_filter = None
-
-        if filters:
-            from qdrant_client.http.models import (
-                Filter,
-                FieldCondition,
-                MatchValue,
-            )
-
-            conditions = [
-                FieldCondition(
-                    key=key,
-                    match=MatchValue(value=value),
-                )
-                for key, value in filters.items()
-            ]
-
-            query_filter = Filter(must=conditions)
 
         results = self.client.search(
             collection_name=self.collection_name,
             query_vector=embedding,
             limit=limit,
             score_threshold=score_threshold,
-            query_filter=query_filter,
+            query_filter=self._build_filter(filters),
             with_payload=True,
         )
 
-        formatted_results = []
+        return [{"id": item.id, "score": item.score, "payload": item.payload} for item in results]
 
-        for result in results:
-            formatted_results.append(
-                {
-                    "id": result.id,
-                    "score": result.score,
-                    "payload": result.payload,
-                }
-            )
-
-        return formatted_results
-
-    def delete_ticket(self, point_id: str):
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=[point_id],
-            wait=True,
-        )
-
+    def delete_ticket(self, point_id: str) -> bool:
+        self.client.delete(collection_name=self.collection_name, points_selector=[point_id], wait=True)
         return True
 
 
-ticket_vector_store = TicketVectorStore()
+# Backward compatibility while using the shorter class name in new code.
+TicketVectorStore = TicketVectors
+ticket_vectors = TicketVectors()
+ticket_vector_store = ticket_vectors

@@ -1,6 +1,7 @@
-
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,8 @@ from app.core.database import close_mongo_connection, connect_to_mongo
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.routes import admin, author, auth, health
-# import logging
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -30,10 +32,17 @@ app = FastAPI(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    # logger = logging.getLogger("uvicorn.access")
-    # Log incoming request method and path
-    # logger.info(f"Incoming request: {request.method} {request.url.path}")
+    start = perf_counter()
     response = await call_next(request)
+    elapsed_ms = (perf_counter() - start) * 1000
+
+    # Keep access logs concise but useful for tracing slow/error requests.
+    log_message = "%s %s -> %s (%.1fms)"
+    args = (request.method, request.url.path, response.status_code, elapsed_ms)
+    if response.status_code >= 500:
+        logger.error(log_message, *args)
+    else:
+        logger.info(log_message, *args)
     return response
 
 app.add_middleware(
