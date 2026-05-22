@@ -12,16 +12,44 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.config import settings
 from app.core.database import get_db
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import hashlib
+
+from fastapi.security import HTTPBearer
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+)
+
 bearer_scheme = HTTPBearer(auto_error=True)
 
 
+def _normalize_password(password: str) -> str:
+
+    return hashlib.sha256(
+        password.encode("utf-8")
+    ).hexdigest()
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    normalized_password = _normalize_password(password)
+
+    return pwd_context.hash(normalized_password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+def verify_password(
+    plain_password: str,
+    hashed_password: str,
+) -> bool:
+    normalized_password = _normalize_password(
+        plain_password
+    )
+
+    return pwd_context.verify(
+        normalized_password,
+        hashed_password,
+    )
 
 
 def create_access_token(subject: str, role: str) -> str:
