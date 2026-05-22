@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -11,6 +11,7 @@ from app.core.database import close_mongo_connection, connect_to_mongo
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.routes import admin, author, auth, health
+import logging
 
 
 @asynccontextmanager
@@ -26,6 +27,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger = logging.getLogger("uvicorn.access")
+    # Log incoming request method and path
+    logger.info(f"Incoming request: {request.method} {request.url.path}")
+    response = await call_next(request)
+    return response
 
 app.add_middleware(
     CORSMiddleware,

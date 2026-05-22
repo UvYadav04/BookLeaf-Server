@@ -22,6 +22,9 @@ def _ticket_defaults() -> dict[str, Any]:
         "aiMeta": {},
     }
 
+from bson import ObjectId
+from bson.errors import InvalidId
+
 
 async def create_ticket(
     payload: TicketCreateRequest,
@@ -31,14 +34,39 @@ async def create_ticket(
     image: UploadFile | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
-    ticket_id = f"tkt_{int(now.timestamp() * 1000)}"
-    book_id = payload.bookId
-    if book_id:
-        book = await db.books.find_one({"_id": book_id, "authorId": author["_id"]})
-        if not book:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
 
-    image_url = await save_ticket_image(ticket_id, image) if image else None
+    ticket_id = f"tkt_{int(now.timestamp() * 1000)}"
+
+    book_id = payload.bookId
+    book = None
+
+    if book_id:
+        try:
+            parsed_book_id = ObjectId(book_id)
+
+            book = await db.books.find_one(
+                {
+                    "_id": parsed_book_id,
+                    "authorId": author["_id"],
+                }
+            )
+
+            if not book:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Book not found",
+                )
+
+            book_id = str(parsed_book_id)
+
+        except InvalidId:
+            pass
+
+    image_url = (
+        await save_ticket_image(ticket_id, image)
+        if image
+        else None
+    )
 
     ticket = {
         "_id": ticket_id,
@@ -51,10 +79,18 @@ async def create_ticket(
         "createdAt": now,
         "updatedAt": now,
     }
+
     await db.tickets.insert_one(ticket)
 
-    classification = await ai_service.classify_ticket(payload.subject, payload.description)
-    priority = await ai_service.prioritize_ticket(payload.subject, payload.description)
+    classification = await ai_service.classify_ticket(
+        payload.subject,
+        payload.description,
+    )
+
+    priority = await ai_service.prioritize_ticket(
+        payload.subject,
+        payload.description,
+    )
 
     update_fields: dict[str, Any] = {
         "category": classification["category"],
@@ -67,9 +103,55 @@ async def create_ticket(
         },
     }
 
-    await db.tickets.update_one({"_id": ticket["_id"]}, {"$set": update_fields})
+    await db.tickets.update_one(
+        {"_id": ticket["_id"]},
+        {"$set": update_fields},
+    )
+
     ticket.update(update_fields)
-    await ticket_ws_manager.notify_ticket_update(db, ticket["_id"], event_type="ticket.updated")
+
+
+    try:
+        vector_metadata = {
+            "ticket_id": ticket["_id"],
+            "author_id": str(author["_id"]),
+            "book_id": book_id,
+            "category": classification["category"],
+            "priority": priority["priority"],
+            "status": ticket["status"],
+            "created_at": now.isoformat(),
+            "final_response": None,
+        }
+
+        vector_id = ticket_vector_store.add_ticket(
+            title=payload.subject,
+            description=payload.description,
+            metadata=vector_metadata,
+        )
+
+        await db.tickets.update_one(
+            {"_id": ticket["_id"]},
+            {
+                "$set": {
+                    "vectorId": vector_id,
+                    "updatedAt": utc_now(),
+                }
+            },
+        )
+
+        ticket["vectorId"] = vector_id
+
+    except Exception as e:
+        print(
+            f"Failed to store ticket in vector DB: {str(e)}"
+        )
+
+    await ticket_ws_manager.notify_ticket_update(
+        db,
+        ticket["_id"],
+        event_type="ticket.updated",
+    )
+
     return ticket
 
 
@@ -225,20 +307,78 @@ async def assign_ticket(
     return updated_ticket
 
 
-async def generate_draft_for_ticket(ticket_id: str, db: AsyncIOMotorDatabase) -> dict[str, Any]:
-    ticket = await db.tickets.find_one({"_id": ticket_id})
-    if not ticket:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+from typing import Any
 
-    author = await db.users.find_one({"_id": ticket["authorId"]})
+from fastapi import HTTPException, status
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from ..core.qdrant import ticket_vector_store
+from ..utils.time import utc_now
+
+
+async def generate_draft_for_ticket(
+    ticket_id: str,
+    db: AsyncIOMotorDatabase,
+) -> dict[str, Any]:
+    ticket = await db.tickets.find_one({"_id": ticket_id})
+
+    if not ticket:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+
+    author = await db.users.find_one(
+        {"_id": ticket["authorId"]}
+    )
+
     if not author:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Author not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Author not found",
+        )
 
     book = None
-    if ticket.get("bookId"):
-        book = await db.books.find_one({"_id": ticket["bookId"]})
 
-    draft = await ai_service.draft_response(ticket, author, book)
+    if ticket.get("bookId"):
+        book = await db.books.find_one(
+            {"_id": ticket["bookId"]}
+        )
+
+    related_tickets = ticket_vector_store.search_tickets(
+        title=ticket.get("subject", ""),
+        description=ticket.get("description", ""),
+        limit=5,
+        score_threshold=0.72,
+        filters={
+            "status": "resolved",
+            "book_id":ticket["bookId"]
+        },
+    )
+
+    print(related_tickets)
+
+    historical_context = []
+
+    for related in related_tickets:
+        payload = related.get("payload", {})
+
+        historical_context.append(
+            {
+                "score": related.get("score"),
+                "title": payload.get("title"),
+                "description": payload.get("description"),
+                "resolution": payload.get("final_response"),
+                "topic": payload.get("topic"),
+            }
+        )
+
+    draft = await ai_service.draft_response(
+        ticket=ticket,
+        author=author,
+        book=book,
+        historical_context=historical_context,
+    )
 
     await db.tickets.update_one(
         {"_id": ticket_id},
@@ -246,8 +386,13 @@ async def generate_draft_for_ticket(ticket_id: str, db: AsyncIOMotorDatabase) ->
             "$set": {
                 "updatedAt": utc_now(),
                 "aiMeta.draft": draft,
+                "aiMeta.relatedTickets": historical_context,
             }
         },
     )
 
-    return draft
+    return {
+        "success": True,
+        "draft": draft,
+        "relatedTickets": historical_context,
+    }

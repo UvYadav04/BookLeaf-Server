@@ -72,6 +72,7 @@ async def signup_user(payload: SignupRequest, db: AsyncIOMotorDatabase) -> dict[
 
 async def login_user(payload: LoginRequest, db: AsyncIOMotorDatabase) -> dict[str, Any]:
     user = await db.users.find_one({"email": _normalize_email(payload.email)})
+    print(user)
     if not user or not verify_password(payload.password, user["passwordHash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

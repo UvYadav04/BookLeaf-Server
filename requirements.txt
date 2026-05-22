@@ -16,3 +16,5 @@ qdrant-client==1.14.2
 fastembed==0.6.1
 orjson==3.10.18
 email-validator==2.2.0
+qdrant-client==1.17.1
+dotenv
