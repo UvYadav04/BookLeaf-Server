@@ -82,7 +82,6 @@ async def signup_user(payload: SignupRequest, db: AsyncIOMotorDatabase) -> dict[
     now = datetime.now(timezone.utc)
     role = "admin" if email in _admin_emails() else "author"
     user: dict[str, Any] = {
-        "_id": f"usr_{uuid.uuid4().hex[:12]}",
         "name": payload.name.strip(),
         "email": email,
         "passwordHash": hash_password(payload.password),
